@@ -11,27 +11,24 @@ const path = require('path');
 const fs = require('fs');       
 
 const app = express();
-app.use(cors()); 
+
+// --- 1. DYNAMIC CORS SETUP ---
+app.use(cors({
+    origin: ["https://sairam-client.vercel.app", "http://localhost:3000"], 
+    methods: ["GET", "POST", "PUT", "DELETE"],
+    credentials: true
+}));
+
 app.use(express.json());
 
-// --- 1. SMART DIRECTORY SETUP ---
-// This identifies if 'uploads' is inside 'server' or in the root folder
+// --- 2. DIRECTORY SETUP ---
 let uploadsDir = path.join(__dirname, 'uploads'); 
-
 if (!fs.existsSync(uploadsDir)) {
-    const parentDirUploads = path.join(__dirname, '..', 'uploads');
-    if (fs.existsSync(parentDirUploads)) {
-        uploadsDir = parentDirUploads;
-    } else {
-        // Creates it inside 'server' if not found anywhere
-        fs.mkdirSync(uploadsDir, { recursive: true });
-    }
+    fs.mkdirSync(uploadsDir, { recursive: true });
 }
-console.log("✅ Server successfully linked to:", uploadsDir);
-
 app.use('/uploads', express.static(uploadsDir));
 
-// --- 2. DATABASE SCHEMA ---
+// --- 3. DATABASE SCHEMA ---
 const studentSchema = new mongoose.Schema({
     name: { type: String, required: true },
     mobile: { type: String, required: true, unique: true },
@@ -44,7 +41,7 @@ const studentSchema = new mongoose.Schema({
 const Student = mongoose.model('Student', studentSchema);
 const otpStore = {}; 
 
-// --- 3. EMAIL SETUP ---
+// --- 4. EMAIL SETUP ---
 const transporter = nodemailer.createTransport({
     service: 'gmail',
     auth: {
@@ -53,14 +50,12 @@ const transporter = nodemailer.createTransport({
     }
 });
 
-// --- 4. AUTHENTICATION ROUTES ---
+// --- 5. ROUTES ---
 app.post('/api/register', async (req, res) => {
     const { name, mobile, email, password } = req.body;
     if (!email || !name || !password || !mobile) return res.status(400).json({ error: "All fields required" });
-    
     const otp = Math.floor(100000 + Math.random() * 900000);
     otpStore[mobile] = { otp, name, email, password }; 
-
     try {
         await transporter.sendMail({
             from: `"SAI RAM TUTORIALS" <${process.env.EMAIL_USER}>`,
@@ -69,10 +64,7 @@ app.post('/api/register', async (req, res) => {
             text: `Namaste ${name}, your verification code is: ${otp}.`
         });
         res.status(200).json({ success: true });
-    } catch (err) {
-        console.error("❌ Email Error:", err);
-        res.status(500).json({ error: "Email failed to send." });
-    }
+    } catch (err) { res.status(500).json({ error: "Email failed." }); }
 });
 
 app.post('/api/verify-registration', async (req, res) => {
@@ -84,12 +76,8 @@ app.post('/api/verify-registration', async (req, res) => {
             await newStudent.save();
             delete otpStore[mobile]; 
             res.status(200).json({ success: true });
-        } catch (dbErr) {
-            res.status(500).json({ error: "User already exists." });
-        }
-    } else {
-        res.status(400).json({ error: "Invalid OTP" });
-    }
+        } catch (dbErr) { res.status(500).json({ error: "User already exists." }); }
+    } else { res.status(400).json({ error: "Invalid OTP" }); }
 });
 
 app.post('/api/login', async (req, res) => {
@@ -99,19 +87,14 @@ app.post('/api/login', async (req, res) => {
         if (!student) return res.status(401).json({ error: "Invalid credentials" });
         if (!student.isApproved) return res.status(403).json({ error: "Account pending approval" });
         res.json({ success: true, student });
-    } catch (err) {
-        res.status(500).json({ error: "Login failed" });
-    }
+    } catch (err) { res.status(500).json({ error: "Login failed" }); }
 });
 
-// --- 5. ADMIN STUDENT MANAGEMENT ---
 app.get('/api/admin/pending', async (req, res) => {
     try {
         const students = await Student.find({}).sort({ createdAt: -1 }); 
         res.json(students);
-    } catch (err) {
-        res.status(500).json({ error: "Fetch failed" });
-    }
+    } catch (err) { res.status(500).json({ error: "Fetch failed" }); }
 });
 
 app.post('/api/admin/approve', async (req, res) => {
@@ -128,47 +111,30 @@ app.post('/api/admin/approve', async (req, res) => {
     } catch (err) { res.status(500).json({ error: "Approval failed" }); }
 });
 
-// --- 6. FILE UPLOAD SYSTEM (RELIABLE PATHS) ---
+// --- 6. UPLOAD ENGINE ---
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    // Multer reads fields in order; ensure 'subject' is sent BEFORE 'file' in frontend
     const subject = req.body.subject || 'Uncategorized'; 
     const subjectFolder = path.join(uploadsDir, subject); 
-    
-    try {
-        if (!fs.existsSync(subjectFolder)) {
-            fs.mkdirSync(subjectFolder, { recursive: true });
-        }
-        cb(null, subjectFolder);
-    } catch (err) {
-        console.error("❌ Folder Creation Error:", err);
-        cb(err, null);
-    }
+    if (!fs.existsSync(subjectFolder)) fs.mkdirSync(subjectFolder, { recursive: true });
+    cb(null, subjectFolder);
   },
   filename: (req, file, cb) => {
     const category = req.body.category || 'General';
-    // Sanitizes filename by replacing spaces with underscores
     const safeName = file.originalname.replace(/\s+/g, '_');
     cb(null, `${category}-${Date.now()}-${safeName}`);
   }
 });
-
 const upload = multer({ storage });
 
 app.post('/api/admin/upload', upload.single('file'), (req, res) => {
-  if (!req.file) {
-      console.error("❌ Upload Attempt Failed: No file received");
-      return res.status(400).json({ error: "No file uploaded" });
-  }
-  console.log("📂 File saved at:", req.file.path);
-  res.json({ success: true, message: "File uploaded successfully" });
+  if (!req.file) return res.status(400).json({ error: "No file" });
+  res.json({ success: true });
 });
 
-// --- 7. FILE MANAGEMENT ---
 app.get('/api/files/:subject', (req, res) => {
   const subjectPath = path.join(uploadsDir, req.params.subject);
   if (!fs.existsSync(subjectPath)) return res.json([]);
-
   const files = fs.readdirSync(subjectPath).map(filename => ({
       name: filename,
       category: filename.split('-')[0] 
@@ -176,31 +142,10 @@ app.get('/api/files/:subject', (req, res) => {
   res.json(files);
 });
 
-app.post('/api/admin/delete-file', (req, res) => {
-    const { subject, fileName } = req.body;
-    const filePath = path.join(uploadsDir, subject, fileName);
-    try {
-        if (fs.existsSync(filePath)) {
-            fs.unlinkSync(filePath);
-            res.json({ success: true, message: "File deleted successfully" });
-        } else {
-            res.status(404).json({ error: "File not found" });
-        }
-    } catch (err) {
-        res.status(500).json({ error: "Delete failed" });
-    }
-});
-
-// --- 8. DATABASE CONNECTION ---
-const DB_URI = process.env.MONGO_URI || "mongodb://localhost:27017/sairam";
-mongoose.connect(DB_URI)
+// --- 7. SERVER START ---
+const PORT = process.env.PORT || 5000;
+mongoose.connect(process.env.MONGO_URI)
     .then(() => {
-        console.log("📂 Database Connected Successfully");
-        app.listen(5000, () => {
-            console.log(`🚀 Server running on Port 5000`);
-            console.log(`📡 Ready for uploads...`);
-        });
+        app.listen(PORT, () => console.log(`🚀 Server on Port ${PORT}`));
     })
-    .catch(err => {
-        console.error("❌ MongoDB Connection Error:", err.message);
-    });
+    .catch(err => console.error("Database Error", err));
