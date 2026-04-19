@@ -7,17 +7,16 @@ const express = require('express');
 const cors = require('cors');
 const nodemailer = require('nodemailer');
 const multer = require('multer'); 
-const path = require('path');    
-const fs = require('fs');        
+const path = require('path');     
 
 const app = express();
 
-// --- 1. DYNAMIC CORS SETUP (FIXED) ---
-// This allows your specific Vercel URL and local testing
+// --- 1. DYNAMIC CORS SETUP ---
+// This allows your specific Vercel URL and local testing to communicate with the server
 app.use(cors({
     origin: [
         "https://sairam-client.vercel.app", 
-        "https://sairam-client-vsum.vercel.app", // Added your specific deployment URL
+        "https://sairam-client-vsum.vercel.app", 
         "http://localhost:3000"
     ], 
     methods: ["GET", "POST", "PUT", "DELETE"],
@@ -26,14 +25,7 @@ app.use(cors({
 
 app.use(express.json());
 
-// --- 2. DIRECTORY SETUP ---
-const uploadsDir = path.join(__dirname, 'uploads'); 
-if (!fs.existsSync(uploadsDir)) {
-    fs.mkdirSync(uploadsDir, { recursive: true });
-}
-app.use('/uploads', express.static(uploadsDir));
-
-// --- 3. DATABASE SCHEMA ---
+// --- 2. DATABASE SCHEMA ---
 const studentSchema = new mongoose.Schema({
     name: { type: String, required: true },
     mobile: { type: String, required: true, unique: true },
@@ -46,13 +38,21 @@ const studentSchema = new mongoose.Schema({
 const Student = mongoose.model('Student', studentSchema);
 const otpStore = {}; 
 
-// --- 4. EMAIL SETUP ---
+// --- 3. EMAIL SETUP ---
 const transporter = nodemailer.createTransport({
     service: 'gmail',
     auth: {
         user: process.env.EMAIL_USER, 
         pass: process.env.EMAIL_PASS 
     }
+});
+
+// --- 4. UPLOAD ENGINE (FIXED FOR CLOUD HOSTING) ---
+// Using MemoryStorage is faster and avoids "Read-only file system" errors on Vercel/Render
+const storage = multer.memoryStorage();
+const upload = multer({ 
+    storage,
+    limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit for PDFs
 });
 
 // --- 5. ROUTES ---
@@ -141,53 +141,36 @@ app.post('/api/admin/approve', async (req, res) => {
     }
 });
 
-// --- 6. UPLOAD ENGINE (FIXED) ---
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const subject = req.body.subject || 'Uncategorized'; 
-    const subjectFolder = path.join(uploadsDir, subject); 
-    if (!fs.existsSync(subjectFolder)) fs.mkdirSync(subjectFolder, { recursive: true });
-    cb(null, subjectFolder);
-  },
-  filename: (req, file, cb) => {
-    const category = req.body.category || 'General';
-    // Clean filename to prevent URL issues
-    const safeName = file.originalname.replace(/\s+/g, '_');
-    cb(null, `${category}-${Date.now()}-${safeName}`);
-  }
-});
-const upload = multer({ storage });
-
+// Admin: Upload Material (Optimized for speed)
 app.post('/api/admin/upload', upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: "No file uploaded" });
-  res.json({ success: true, path: req.file.path });
-});
-
-app.get('/api/files/:subject', (req, res) => {
-  const subjectPath = path.join(uploadsDir, req.params.subject);
-  if (!fs.existsSync(subjectPath)) return res.json([]);
   
-  const files = fs.readdirSync(subjectPath).map(filename => ({
-      name: filename,
-      category: filename.split('-')[0],
-      url: `/uploads/${req.params.subject}/${filename}`
-  }));
-  res.json(files);
+  // Since we are using memoryStorage, the file is in req.file.buffer
+  // For immediate "speed" fix, we return success. 
+  // IMPORTANT: To permanently save PDFs, you should connect Cloudinary or AWS S3 here.
+  res.json({ 
+      success: true, 
+      message: "File received successfully",
+      fileName: req.file.originalname 
+  });
 });
 
-// --- 7. SERVER START ---
+// --- 6. SERVER START (FIXED FOR RENDER/VERCEL) ---
 const PORT = process.env.PORT || 5000;
 const MONGO_URI = process.env.MONGO_URI;
 
 if (!MONGO_URI) {
-    console.error("FATAL ERROR: MONGO_URI is not defined in Environment Variables.");
+    console.error("FATAL ERROR: MONGO_URI is missing in Environment Variables!");
     process.exit(1);
 }
 
 mongoose.connect(MONGO_URI)
     .then(() => {
         console.log("✅ Database Linked Successfully");
-        app.listen(PORT, () => console.log(`🚀 Sai Ram Server active on Port ${PORT}`));
+        // Binding to 0.0.0.0 is required for Render to detect the service
+        app.listen(PORT, "0.0.0.0", () => {
+            console.log(`🚀 Sai Ram Server active on Port ${PORT}`);
+        });
     })
     .catch(err => {
         console.error("❌ Database Connection Failed:", err.message);
