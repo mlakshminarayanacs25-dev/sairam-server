@@ -12,7 +12,7 @@ const fs = require('fs');
 
 const app = express();
 
-// --- 1. CORS SETUP ---
+// --- CORS SETUP ---
 const allowedOrigins = [
     "https://sairamtutorials.vercel.app",
     "https://sairam-client-vsum.vercel.app",
@@ -33,14 +33,14 @@ app.use(cors({
 
 app.use(express.json());
 
-// --- 2. DIRECTORY SETUP ---
+// --- DIRECTORY SETUP ---
 const uploadsDir = path.join(__dirname, 'uploads'); 
 if (!fs.existsSync(uploadsDir)) {
     fs.mkdirSync(uploadsDir, { recursive: true });
 }
 app.use('/uploads', express.static(uploadsDir));
 
-// --- 3. DATABASE SCHEMA ---
+// --- DATABASE SCHEMA ---
 const studentSchema = new mongoose.Schema({
     name: { type: String, required: true },
     mobile: { type: String, required: true, unique: true },
@@ -53,7 +53,7 @@ const studentSchema = new mongoose.Schema({
 const Student = mongoose.model('Student', studentSchema);
 const otpStore = {}; 
 
-// --- 4. EMAIL SETUP ---
+// --- EMAIL SETUP ---
 const transporter = nodemailer.createTransport({
     service: 'gmail',
     auth: {
@@ -62,7 +62,7 @@ const transporter = nodemailer.createTransport({
     }
 });
 
-// --- 5. STUDENT & ADMIN ROUTES ---
+// --- ROUTES ---
 
 app.post('/api/register', async (req, res) => {
     const { name, mobile, email, password } = req.body;
@@ -117,8 +117,15 @@ app.post('/api/admin/approve', async (req, res) => {
     } catch (err) { res.status(500).json({ error: "Fail" }); }
 });
 
-// --- 6. UPLOAD & DELETE ENGINE (FIXED) ---
+// REMOVE STUDENT ROUTE
+app.delete('/api/admin/delete-student/:mobile', async (req, res) => {
+    try {
+        await Student.findOneAndDelete({ mobile: req.params.mobile });
+        res.json({ success: true });
+    } catch (err) { res.status(500).json({ error: "Delete fail" }); }
+});
 
+// --- FILE ENGINE ---
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     const subject = req.body.subject || 'Uncategorized'; 
@@ -139,7 +146,6 @@ app.post('/api/admin/upload', upload.single('file'), (req, res) => {
   res.json({ success: true });
 });
 
-// GET FILES
 app.get('/api/files/:subject', (req, res) => {
   const subjectPath = path.join(uploadsDir, req.params.subject);
   if (!fs.existsSync(subjectPath)) return res.json([]);
@@ -150,20 +156,17 @@ app.get('/api/files/:subject', (req, res) => {
   res.json(files);
 });
 
-// DELETE FILE ROUTE (ADDED TO FIX 404)
 app.post('/api/admin/delete-file', (req, res) => {
     const { subject, fileName } = req.body;
     const filePath = path.join(uploadsDir, subject, fileName);
-
     if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath); // Deletes the file
-        res.json({ success: true, message: "File deleted successfully" });
+        fs.unlinkSync(filePath);
+        res.json({ success: true });
     } else {
-        res.status(404).json({ error: "File not found on server" });
+        res.status(404).json({ error: "Not found" });
     }
 });
 
-// --- 7. SERVER START ---
 const PORT = process.env.PORT || 5000;
 mongoose.connect(process.env.MONGO_URI)
     .then(() => {
