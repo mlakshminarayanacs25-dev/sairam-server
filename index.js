@@ -12,8 +12,7 @@ const fs = require('fs');
 
 const app = express();
 
-// --- 1. FIXED CORS SETUP ---
-// This allows your specific domain and any sub-deployments from Vercel
+// --- 1. CORS SETUP ---
 const allowedOrigins = [
     "https://sairamtutorials.vercel.app",
     "https://sairam-client-vsum.vercel.app",
@@ -22,17 +21,14 @@ const allowedOrigins = [
 
 app.use(cors({
     origin: function (origin, callback) {
-        // allow requests with no origin (like mobile apps or curl requests)
         if (!origin) return callback(null, true);
         if (allowedOrigins.indexOf(origin) === -1) {
-            const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
-            return callback(new Error(msg), false);
+            return callback(new Error('CORS blocked'), false);
         }
         return callback(null, true);
     },
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    credentials: true,
-    allowedHeaders: ["Content-Type", "Authorization"]
+    credentials: true
 }));
 
 app.use(express.json());
@@ -66,22 +62,21 @@ const transporter = nodemailer.createTransport({
     }
 });
 
-// --- 5. ROUTES ---
+// --- 5. STUDENT & ADMIN ROUTES ---
 
 app.post('/api/register', async (req, res) => {
     const { name, mobile, email, password } = req.body;
-    if (!email || !name || !password || !mobile) return res.status(400).json({ error: "All fields required" });
     const otp = Math.floor(100000 + Math.random() * 900000);
     otpStore[mobile] = { otp, name, email, password }; 
     try {
         await transporter.sendMail({
             from: `"SAI RAM TUTORIALS" <${process.env.EMAIL_USER}>`,
             to: email,
-            subject: "Verification Code - Sai Ram Tutorials",
-            text: `Namaste ${name}, your verification code is: ${otp}.`
+            subject: "Verification Code",
+            text: `Your code is: ${otp}`
         });
         res.status(200).json({ success: true });
-    } catch (err) { res.status(500).json({ error: "Email failed." }); }
+    } catch (err) { res.status(500).json({ error: "Email failed" }); }
 });
 
 app.post('/api/verify-registration', async (req, res) => {
@@ -93,7 +88,7 @@ app.post('/api/verify-registration', async (req, res) => {
             await newStudent.save();
             delete otpStore[mobile]; 
             res.status(200).json({ success: true });
-        } catch (dbErr) { res.status(500).json({ error: "User already exists." }); }
+        } catch (dbErr) { res.status(500).json({ error: "Exists" }); }
     } else { res.status(400).json({ error: "Invalid OTP" }); }
 });
 
@@ -101,34 +96,29 @@ app.post('/api/login', async (req, res) => {
     const { mobile, password } = req.body;
     try {
         const student = await Student.findOne({ mobile, password });
-        if (!student) return res.status(401).json({ error: "Invalid credentials" });
-        if (!student.isApproved) return res.status(403).json({ error: "Account pending approval" });
+        if (!student) return res.status(401).json({ error: "Invalid" });
+        if (!student.isApproved) return res.status(403).json({ error: "Pending" });
         res.json({ success: true, student });
-    } catch (err) { res.status(500).json({ error: "Login failed" }); }
+    } catch (err) { res.status(500).json({ error: "Fail" }); }
 });
 
 app.get('/api/admin/pending', async (req, res) => {
     try {
         const students = await Student.find({}).sort({ createdAt: -1 }); 
         res.json(students);
-    } catch (err) { res.status(500).json({ error: "Fetch failed" }); }
+    } catch (err) { res.status(500).json({ error: "Fetch fail" }); }
 });
 
 app.post('/api/admin/approve', async (req, res) => {
     const { mobile } = req.body;
     try {
-        const student = await Student.findOneAndUpdate({ mobile }, { isApproved: true }, { new: true });
-        await transporter.sendMail({
-            from: `"SAI RAM TUTORIALS"`,
-            to: student.email,
-            subject: "Access Granted",
-            html: `<h2>Namaste ${student.name}, Your account is active!</h2>`
-        });
+        await Student.findOneAndUpdate({ mobile }, { isApproved: true });
         res.json({ success: true });
-    } catch (err) { res.status(500).json({ error: "Approval failed" }); }
+    } catch (err) { res.status(500).json({ error: "Fail" }); }
 });
 
-// --- 6. UPLOAD ENGINE ---
+// --- 6. UPLOAD & DELETE ENGINE (FIXED) ---
+
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     const subject = req.body.subject || 'Uncategorized'; 
@@ -149,6 +139,7 @@ app.post('/api/admin/upload', upload.single('file'), (req, res) => {
   res.json({ success: true });
 });
 
+// GET FILES
 app.get('/api/files/:subject', (req, res) => {
   const subjectPath = path.join(uploadsDir, req.params.subject);
   if (!fs.existsSync(subjectPath)) return res.json([]);
@@ -159,10 +150,23 @@ app.get('/api/files/:subject', (req, res) => {
   res.json(files);
 });
 
+// DELETE FILE ROUTE (ADDED TO FIX 404)
+app.post('/api/admin/delete-file', (req, res) => {
+    const { subject, fileName } = req.body;
+    const filePath = path.join(uploadsDir, subject, fileName);
+
+    if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath); // Deletes the file
+        res.json({ success: true, message: "File deleted successfully" });
+    } else {
+        res.status(404).json({ error: "File not found on server" });
+    }
+});
+
 // --- 7. SERVER START ---
 const PORT = process.env.PORT || 5000;
 mongoose.connect(process.env.MONGO_URI)
     .then(() => {
-        app.listen(PORT, () => console.log(`🚀 Sai Ram Server Running on Port ${PORT}`));
+        app.listen(PORT, () => console.log(`🚀 Server on Port ${PORT}`));
     })
     .catch(err => console.error("Database Error", err));
