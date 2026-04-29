@@ -12,35 +12,21 @@ const fs = require('fs');
 
 const app = express();
 
-// --- CORS SETUP ---
-const allowedOrigins = [
-    "https://sairamtutorials.vercel.app",
-    "https://sairam-client-vsum.vercel.app",
-    "http://localhost:3000"
-];
-
+// --- CORS ---
 app.use(cors({
-    origin: function (origin, callback) {
-        if (!origin) return callback(null, true);
-        if (allowedOrigins.indexOf(origin) === -1) {
-            return callback(new Error('CORS blocked'), false);
-        }
-        return callback(null, true);
-    },
+    origin: ["https://sairamtutorials.vercel.app", "https://sairam-client-vsum.vercel.app", "http://localhost:3000"],
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     credentials: true
 }));
 
 app.use(express.json());
 
-// --- DIRECTORY SETUP ---
+// --- DIRECTORY ---
 const uploadsDir = path.join(__dirname, 'uploads'); 
-if (!fs.existsSync(uploadsDir)) {
-    fs.mkdirSync(uploadsDir, { recursive: true });
-}
+if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 app.use('/uploads', express.static(uploadsDir));
 
-// --- DATABASE SCHEMA ---
+// --- SCHEMA ---
 const studentSchema = new mongoose.Schema({
     name: { type: String, required: true },
     mobile: { type: String, required: true, unique: true },
@@ -53,123 +39,132 @@ const studentSchema = new mongoose.Schema({
 const Student = mongoose.model('Student', studentSchema);
 const otpStore = {}; 
 
-// --- EMAIL SETUP ---
+// --- UPDATED EMAIL TRANSPORTER (PORT 587) ---
 const transporter = nodemailer.createTransport({
-    service: 'gmail',
+    host: "smtp.gmail.com",
+    port: 587,
+    secure: false, // Use STARTTLS
     auth: {
         user: process.env.EMAIL_USER, 
         pass: process.env.EMAIL_PASS 
+    },
+    tls: {
+        rejectUnauthorized: false // Bypasses the "Email failed" error
     }
 });
 
 // --- ROUTES ---
 
+// 1. REGISTER & SEND OTP
 app.post('/api/register', async (req, res) => {
     const { name, mobile, email, password } = req.body;
     const otp = Math.floor(100000 + Math.random() * 900000);
     otpStore[mobile] = { otp, name, email, password }; 
+    
     try {
         await transporter.sendMail({
             from: `"SAI RAM TUTORIALS" <${process.env.EMAIL_USER}>`,
             to: email,
             subject: "Verification Code",
-            text: `Your code is: ${otp}`
+            html: `<h3>Welcome to Sai Ram Tutorials</h3><p>Your OTP: <b>${otp}</b></p>`
         });
+        console.log(`OTP ${otp} sent to ${email}`);
         res.status(200).json({ success: true });
-    } catch (err) { res.status(500).json({ error: "Email failed" }); }
+    } catch (err) { 
+        console.error("NODEMAILER ERROR:", err);
+        res.status(500).json({ error: "Email failed" }); 
+    }
 });
 
+// 2. VERIFY OTP
 app.post('/api/verify-registration', async (req, res) => {
     const { mobile, otp } = req.body;
     const pending = otpStore[mobile];
     if (pending && pending.otp.toString() === otp.toString()) {
         try {
-            const newStudent = new Student({ ...pending, mobile });
+            const newStudent = new Student({ ...pending, mobile, isApproved: false });
             await newStudent.save();
             delete otpStore[mobile]; 
             res.status(200).json({ success: true });
-        } catch (dbErr) { res.status(500).json({ error: "Exists" }); }
+        } catch (dbErr) { res.status(500).json({ error: "Mobile already registered" }); }
     } else { res.status(400).json({ error: "Invalid OTP" }); }
 });
 
+// 3. LOGIN (LOCKED UNTIL APPROVED)
 app.post('/api/login', async (req, res) => {
     const { mobile, password } = req.body;
     try {
         const student = await Student.findOne({ mobile, password });
-        if (!student) return res.status(401).json({ error: "Invalid" });
-        if (!student.isApproved) return res.status(403).json({ error: "Pending" });
+        if (!student) return res.status(401).json({ error: "Invalid Credentials" });
+        if (!student.isApproved) return res.status(403).json({ error: "Account Pending Admin Approval" });
         res.json({ success: true, student });
-    } catch (err) { res.status(500).json({ error: "Fail" }); }
+    } catch (err) { res.status(500).json({ error: "Server Error" }); }
 });
 
+// 4. ADMIN: GET ALL
 app.get('/api/admin/pending', async (req, res) => {
     try {
         const students = await Student.find({}).sort({ createdAt: -1 }); 
         res.json(students);
-    } catch (err) { res.status(500).json({ error: "Fetch fail" }); }
+    } catch (err) { res.status(500).json({ error: "Fetch Error" }); }
 });
 
+// 5. ADMIN: APPROVE & NOTIFY
 app.post('/api/admin/approve', async (req, res) => {
     const { mobile } = req.body;
     try {
-        await Student.findOneAndUpdate({ mobile }, { isApproved: true });
+        const student = await Student.findOneAndUpdate({ mobile }, { isApproved: true }, { new: true });
+        
+        await transporter.sendMail({
+            from: `"SAI RAM TUTORIALS" <${process.env.EMAIL_USER}>`,
+            to: student.email,
+            subject: "Login Access Granted!",
+            html: `<h3>Hello ${student.name},</h3><p>Your account is approved. You can now login!</p>`
+        });
+
         res.json({ success: true });
-    } catch (err) { res.status(500).json({ error: "Fail" }); }
+    } catch (err) { res.status(500).json({ error: "Approval failed" }); }
 });
 
-// REMOVE STUDENT ROUTE
+// 6. ADMIN: DELETE
 app.delete('/api/admin/delete-student/:mobile', async (req, res) => {
     try {
         await Student.findOneAndDelete({ mobile: req.params.mobile });
         res.json({ success: true });
-    } catch (err) { res.status(500).json({ error: "Delete fail" }); }
+    } catch (err) { res.status(500).json({ error: "Delete failed" }); }
 });
 
-// --- FILE ENGINE ---
+// --- FILE MANAGEMENT ---
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const subject = req.body.subject || 'Uncategorized'; 
-    const subjectFolder = path.join(uploadsDir, subject); 
-    if (!fs.existsSync(subjectFolder)) fs.mkdirSync(subjectFolder, { recursive: true });
-    cb(null, subjectFolder);
-  },
-  filename: (req, file, cb) => {
-    const category = req.body.category || 'General';
-    const safeName = file.originalname.replace(/\s+/g, '_');
-    cb(null, `${category}-${Date.now()}-${safeName}`);
-  }
+    destination: (req, file, cb) => {
+        const folder = path.join(uploadsDir, req.body.subject || 'General');
+        if (!fs.existsSync(folder)) fs.mkdirSync(folder, { recursive: true });
+        cb(null, folder);
+    },
+    filename: (req, file, cb) => {
+        cb(null, `${req.body.category}-${Date.now()}-${file.originalname}`);
+    }
 });
 const upload = multer({ storage });
 
-app.post('/api/admin/upload', upload.single('file'), (req, res) => {
-  if (!req.file) return res.status(400).json({ error: "No file" });
-  res.json({ success: true });
-});
+app.post('/api/admin/upload', upload.single('file'), (req, res) => res.json({ success: true }));
 
 app.get('/api/files/:subject', (req, res) => {
-  const subjectPath = path.join(uploadsDir, req.params.subject);
-  if (!fs.existsSync(subjectPath)) return res.json([]);
-  const files = fs.readdirSync(subjectPath).map(filename => ({
-      name: filename,
-      category: filename.split('-')[0] 
-  }));
-  res.json(files);
+    const p = path.join(uploadsDir, req.params.subject);
+    if (!fs.existsSync(p)) return res.json([]);
+    res.json(fs.readdirSync(p).map(f => ({ name: f, category: f.split('-')[0] })));
 });
 
 app.post('/api/admin/delete-file', (req, res) => {
-    const { subject, fileName } = req.body;
-    const filePath = path.join(uploadsDir, subject, fileName);
-    if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath);
-        res.json({ success: true });
-    } else {
-        res.status(404).json({ error: "Not found" });
-    }
+    const p = path.join(uploadsDir, req.body.subject, req.body.fileName);
+    if (fs.existsSync(p)) fs.unlinkSync(p);
+    res.json({ success: true });
 });
 
+// --- DATABASE & START ---
 const PORT = process.env.PORT || 5000;
 mongoose.connect(process.env.MONGO_URI)
     .then(() => {
-        app.listen(PORT, () => console.log(`🚀 Server on Port ${PORT}`));
+        app.listen(PORT, () => console.log(`🚀 Server on port ${PORT}`));
     })
-    .catch(err => console.error("Database Error", err));
+    .catch(err => console.error("Database Connection Error:", err));
