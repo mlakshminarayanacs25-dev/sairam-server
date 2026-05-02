@@ -38,11 +38,15 @@ const otpStore = {};
 
 // --- THE FINAL TRANSPORTER CONFIG ---
 const transporter = nodemailer.createTransport({
-    service: 'gmail',
-    auth: {
-        user: process.env.EMAIL_USER, 
-        pass: process.env.EMAIL_PASS 
-    }
+  service: 'gmail',
+  host: 'smtp.gmail.com',
+  port: 465, // Use 465 for SSL
+  secure: true, // true for 465, false for other ports
+  auth: {
+    user: process.env.EMAIL_USER, // Your email
+    pass: process.env.EMAIL_PASS, // Your App Password
+  },
+  connectionTimeout: 10000, // Wait 10 seconds before giving up
 });
 
 // --- ROUTES ---
