@@ -1,137 +1,76 @@
-const dns = require('node:dns');
-dns.setServers(['8.8.8.8', '8.8.4.4']); 
-
-require('dotenv').config(); 
-const mongoose = require('mongoose');
 const express = require('express');
-const cors = require('cors');
-const nodemailer = require('nodemailer');
-const multer = require('multer'); 
-const path = require('path');    
-const fs = require('fs');        
+const { Resend } = require('resend');
+const bcrypt = require('bcryptjs');
+const dotenv = require('dotenv');
 
+dotenv.config();
 const app = express();
-
-app.use(cors({
-    origin: ["https://sairamtutorials.vercel.app", "https://sairam-client-vsum.vercel.app", "http://localhost:3000"],
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    credentials: true
-}));
-
 app.use(express.json());
 
-const uploadsDir = path.join(__dirname, 'uploads'); 
-if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
-app.use('/uploads', express.static(uploadsDir));
+// Initialize Resend with API Key from Render Environment
+const resend = new Resend(process.env.RESEND_API_KEY);
 
-const studentSchema = new mongoose.Schema({
-    name: { type: String, required: true },
-    mobile: { type: String, required: true, unique: true },
-    email: { type: String, required: true },
-    password: { type: String, required: true }, 
-    isApproved: { type: Boolean, default: false }, 
-    createdAt: { type: Date, default: Date.now }
-});
+// Temporary In-Memory Store (Use MongoDB in production)
+const users = {}; 
 
-const Student = mongoose.model('Student', studentSchema);
-const otpStore = {}; 
-
-// --- THE FINAL TRANSPORTER CONFIG ---
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  host: 'smtp.gmail.com',
-  port: 465, // Use 465 for SSL
-  secure: true, // true for 465, false for other ports
-  auth: {
-    user: process.env.EMAIL_USER, // Your email
-    pass: process.env.EMAIL_PASS, // Your App Password
-  },
-  connectionTimeout: 10000, // Wait 10 seconds before giving up
-});
-
-// --- ROUTES ---
-
+// --- ROUTE 1: REGISTER & SEND OTP ---
 app.post('/api/register', async (req, res) => {
-    const { name, mobile, email, password } = req.body;
-    const otp = Math.floor(100000 + Math.random() * 900000);
-    otpStore[mobile] = { otp, name, email, password }; 
-    
-    const mailOptions = {
-        from: `"SAI RAM TUTORIALS" <${process.env.EMAIL_USER}>`,
-        to: email,
-        subject: "Verification Code",
-        text: `Your OTP is: ${otp}`
-    };
+    const { email, username, password } = req.body;
 
     try {
-        await transporter.sendMail(mailOptions);
-        console.log(`✅ OTP sent to ${email}`);
-        res.status(200).json({ success: true });
-    } catch (err) { 
-        // THIS LOG IS CRITICAL - READ IT IN YOUR TERMINAL
-        console.error("CRITICAL EMAIL ERROR:", err.message);
-        res.status(500).json({ error: "Email failed", details: err.message }); 
-    }
-});
+        if (!email || !username || !password) {
+            return res.status(400).json({ success: false, message: "Please fill all fields" });
+        }
 
-app.post('/api/verify-registration', async (req, res) => {
-    const { mobile, otp } = req.body;
-    const pending = otpStore[mobile];
-    if (pending && pending.otp.toString() === otp.toString()) {
-        try {
-            const newStudent = new Student({ ...pending, mobile, isApproved: false });
-            await newStudent.save();
-            delete otpStore[mobile]; 
-            res.status(200).json({ success: true });
-        } catch (dbErr) { res.status(500).json({ error: "User exists" }); }
-    } else { res.status(400).json({ error: "Invalid OTP" }); }
-});
+        // 1. Generate a 6-digit OTP
+        const otp = Math.floor(100000 + Math.random() * 900000).toString();
+        const hashedPassword = await bcrypt.hash(password, 10);
 
-app.post('/api/login', async (req, res) => {
-    const { mobile, password } = req.body;
-    try {
-        const student = await Student.findOne({ mobile, password });
-        if (!student) return res.status(401).json({ error: "Wrong info" });
-        if (!student.isApproved) return res.status(403).json({ error: "Not Approved" });
-        res.json({ success: true, student });
-    } catch (err) { res.status(500).json({ error: "Error" }); }
-});
+        // 2. Save User Data (Temporary Store)
+        users[email] = { username, password: hashedPassword, otp, isVerified: false };
 
-app.get('/api/admin/pending', async (req, res) => {
-    const students = await Student.find({}).sort({ createdAt: -1 }); 
-    res.json(students);
-});
-
-app.post('/api/admin/approve', async (req, res) => {
-    const { mobile } = req.body;
-    try {
-        const student = await Student.findOneAndUpdate({ mobile }, { isApproved: true }, { new: true });
-        await transporter.sendMail({
-            from: process.env.EMAIL_USER,
-            to: student.email,
-            subject: "Approved!",
-            text: `Hi ${student.name}, you are approved. Login now!`
+        // 3. Send OTP via Resend API (Bypasses Render's port blocks)
+        const { data, error } = await resend.emails.send({
+            from: 'Sairam Tutorials <onboarding@resend.dev>',
+            to: email, // Note: In Resend Free, this MUST be your own email for testing
+            subject: `${otp} is your Sairam Tutorials OTP`,
+            html: `
+                <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #ddd;">
+                    <h2 style="color: #4A90E2;">Welcome to Sairam Tutorials!</h2>
+                    <p>Hi ${username},</p>
+                    <p>Your verification code is below. It will expire shortly.</p>
+                    <h1 style="background: #f4f4f4; padding: 10px; display: inline-block; letter-spacing: 5px;">${otp}</h1>
+                    <p>If you didn't request this, please ignore this email.</p>
+                </div>
+            `
         });
-        res.json({ success: true });
-    } catch (err) { res.status(500).json({ error: "Approval email failed" }); }
-});
 
-const storage = multer.diskStorage({
-    destination: (req, file, cb) => {
-        const folder = path.join(uploadsDir, req.body.subject || 'General');
-        if (!fs.existsSync(folder)) fs.mkdirSync(folder, { recursive: true });
-        cb(null, folder);
-    },
-    filename: (req, file, cb) => {
-        cb(null, `${req.body.category}-${Date.now()}-${file.originalname}`);
+        if (error) {
+            console.error("Resend Error:", error);
+            return res.status(500).json({ success: false, message: "Failed to send email" });
+        }
+
+        res.status(200).json({ success: true, message: "OTP sent to email!" });
+
+    } catch (err) {
+        console.error("Server Error:", err);
+        res.status(500).json({ success: false, message: "Internal Server Error" });
     }
 });
-const upload = multer({ storage });
-app.post('/api/admin/upload', upload.single('file'), (req, res) => res.json({ success: true }));
+
+// --- ROUTE 2: VERIFY OTP ---
+app.post('/api/verify', async (req, res) => {
+    const { email, otp } = req.body;
+    const user = users[email];
+
+    if (user && user.otp === otp) {
+        user.isVerified = true;
+        // In production: Save 'user' to your actual Database here
+        res.status(200).json({ success: true, message: "Email verified successfully!" });
+    } else {
+        res.status(400).json({ success: false, message: "Invalid or expired OTP" });
+    }
+});
 
 const PORT = process.env.PORT || 5000;
-mongoose.connect(process.env.MONGO_URI)
-    .then(() => {
-        console.log("✅ Database Connected");
-        app.listen(PORT, () => console.log(`🚀 Server on port ${PORT}`));
-    });
+app.listen(PORT, () => console.log(`🚀 Sairam Server running on port ${PORT}`));
