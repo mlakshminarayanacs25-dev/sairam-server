@@ -112,7 +112,7 @@ app.post('/api/verify-registration', handleVerification);
 app.get('/api/files/:category', (req, res) => {
     const { category } = req.params;
     console.log(`Fetching files for category: ${category}`);
-    // Return empty array (or dummy files list) so frontend map() doesn't fail
+    // Returning an empty array prevents the frontend .map() function from crashing
     res.status(200).json([]);
 });
 
