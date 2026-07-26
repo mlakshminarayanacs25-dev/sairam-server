@@ -16,7 +16,6 @@ const allowedOrigins = [
 
 app.use(cors({
     origin: function (origin, callback) {
-        // Allow requests with no origin (like Postman or server-to-server)
         if (!origin) return callback(null, true);
         
         if (allowedOrigins.indexOf(origin) !== -1) {
@@ -39,7 +38,6 @@ const tempUserStore = {};
 
 // --- REGISTRATION ROUTE ---
 app.post('/api/register', async (req, res) => {
-    // Accepts all possible field names sent from your React form
     const { email, username, name, password, phone } = req.body;
     const finalUsername = username || name;
 
@@ -51,11 +49,9 @@ app.post('/api/register', async (req, res) => {
             });
         }
 
-        // Generate 6-digit OTP and hash password
         const otp = Math.floor(100000 + Math.random() * 900000).toString();
         const hashedPassword = await bcrypt.hash(password, 10);
 
-        // Store user in temporary object
         tempUserStore[email] = { 
             username: finalUsername, 
             password: hashedPassword, 
@@ -63,10 +59,8 @@ app.post('/api/register', async (req, res) => {
             otp 
         };
 
-        // Print OTP to server logs so you can see it on Render during testing
         console.log(`[OTP Generated] For: ${email} | Code: ${otp}`);
 
-        // Try sending OTP via Resend safely
         try {
             const { error } = await resend.emails.send({
                 from: 'Sairam Tutorials <onboarding@resend.dev>',
@@ -82,13 +76,12 @@ app.post('/api/register', async (req, res) => {
             });
 
             if (error) {
-                console.warn("Resend email delivery warning (Free tier restriction):", error.message);
+                console.warn("Resend email delivery warning:", error.message);
             }
         } catch (resendErr) {
             console.warn("Failed to send email via Resend, proceeding with flow:", resendErr);
         }
 
-        // Always return success so user can proceed to enter OTP
         return res.status(200).json({ 
             success: true, 
             message: "OTP sent successfully!" 
@@ -100,8 +93,8 @@ app.post('/api/register', async (req, res) => {
     }
 });
 
-// --- VERIFY ROUTE ---
-app.post('/api/verify', (req, res) => {
+// --- VERIFY ROUTE (Handler) ---
+const handleVerification = (req, res) => {
     const { email, otp } = req.body;
     const user = tempUserStore[email];
 
@@ -110,14 +103,17 @@ app.post('/api/verify', (req, res) => {
     } else {
         res.status(400).json({ success: false, message: "Invalid OTP" });
     }
-});
+};
 
-// --- ADMIN UPLOAD ROUTE ---
+// Supports both route names used by frontend
+app.post('/api/verify', handleVerification);
+app.post('/api/verify-registration', handleVerification);
+
+// --- ADMIN ROUTES ---
 app.post('/api/admin/upload', (req, res) => {
     res.status(200).json({ success: true, message: "Upload received successfully!" });
 });
 
-// --- ADMIN PENDING ROUTE ---
 app.get('/api/admin/pending', (req, res) => {
     res.status(200).json({ success: true, pendingRequests: [] });
 });
