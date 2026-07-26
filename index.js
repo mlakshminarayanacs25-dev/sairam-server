@@ -89,10 +89,15 @@ app.post('/api/verify', (req, res) => {
     }
 });
 
-// --- ADMIN UPLOAD ROUTE (Added to fix 404 error) ---
+// --- ADMIN UPLOAD ROUTE ---
 app.post('/api/admin/upload', (req, res) => {
-    // Replace this logic later with file/data handling logic
     res.status(200).json({ success: true, message: "Upload received successfully!" });
+});
+
+// --- ADMIN PENDING ROUTE (Added to fix 404 error) ---
+app.get('/api/admin/pending', (req, res) => {
+    // Return dummy data/array or empty list for now until database integration
+    res.status(200).json({ success: true, pendingRequests: [] });
 });
 
 const PORT = process.env.PORT || 5000;
