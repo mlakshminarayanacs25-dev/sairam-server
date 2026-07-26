@@ -93,7 +93,7 @@ app.post('/api/register', async (req, res) => {
     }
 });
 
-// --- VERIFY ROUTE (Handler) ---
+// --- VERIFY ROUTE ---
 const handleVerification = (req, res) => {
     const { email, otp } = req.body;
     const user = tempUserStore[email];
@@ -105,9 +105,16 @@ const handleVerification = (req, res) => {
     }
 };
 
-// Supports both route names used by frontend
 app.post('/api/verify', handleVerification);
 app.post('/api/verify-registration', handleVerification);
+
+// --- FILES ROUTE (Fixes 404 & map error) ---
+app.get('/api/files/:category', (req, res) => {
+    const { category } = req.params;
+    console.log(`Fetching files for category: ${category}`);
+    // Return empty array (or dummy files list) so frontend map() doesn't fail
+    res.status(200).json([]);
+});
 
 // --- ADMIN ROUTES ---
 app.post('/api/admin/upload', (req, res) => {
