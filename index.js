@@ -8,7 +8,7 @@ dotenv.config();
 
 const app = express();
 
-// 1. FIX CORS ERROR (Allows localhost during development and Vercel in production)
+// 1. CORS CONFIGURATION (Allows localhost during development and Vercel in production)
 const allowedOrigins = [
     'http://localhost:3000',
     'https://sairamtutorials.vercel.app'
@@ -31,7 +31,7 @@ app.use(cors({
 
 app.use(express.json());
 
-// 2. INITIALIZE RESEND
+// 2. INITIALIZE RESEND API
 const resend = new Resend(process.env.RESEND_API_KEY);
 
 // Temporary Storage
@@ -39,34 +39,52 @@ const tempUserStore = {};
 
 // --- REGISTRATION ROUTE ---
 app.post('/api/register', async (req, res) => {
-    const { email, username, password } = req.body;
+    // Accepts all field names that your frontend form sends
+    const { email, username, name, password, phone } = req.body;
+
+    // Resolves username whether frontend sends 'username' or 'name'
+    const finalUsername = username || name;
 
     try {
-        if (!email || !username || !password) {
-            return res.status(400).json({ success: false, message: "Missing fields" });
+        if (!email || !finalUsername || !password) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Missing required fields (email, name/username, or password)" 
+            });
         }
 
+        // Generate a 6-digit OTP
         const otp = Math.floor(100000 + Math.random() * 900000).toString();
         const hashedPassword = await bcrypt.hash(password, 10);
 
-        tempUserStore[email] = { username, password: hashedPassword, otp };
+        // Store user data temporarily
+        tempUserStore[email] = { 
+            username: finalUsername, 
+            password: hashedPassword, 
+            phone: phone || '', 
+            otp 
+        };
 
+        // Send OTP via Resend
         const { data, error } = await resend.emails.send({
             from: 'Sairam Tutorials <onboarding@resend.dev>',
-            to: email,
+            to: email, // Note: Free tier only sends to your own registered email address
             subject: `Your OTP: ${otp}`,
             html: `
                 <div style="font-family: sans-serif; padding: 20px; border: 1px solid #eee;">
                     <h2>Welcome to Sairam Tutorials</h2>
-                    <p>Hi ${username}, your verification code is:</p>
-                    <h1 style="color: #4f46e5;">${otp}</h1>
+                    <p>Hi <strong>${finalUsername}</strong>, your verification code is:</p>
+                    <h1 style="color: #4f46e5; letter-spacing: 2px;">${otp}</h1>
                 </div>
             `
         });
 
         if (error) {
             console.error("Resend Error:", error);
-            return res.status(500).json({ success: false, message: "Email service failed" });
+            return res.status(500).json({ 
+                success: false, 
+                message: "Email service failed. On Resend free tier, emails can only be sent to your registered account email." 
+            });
         }
 
         res.status(200).json({ success: true, message: "OTP sent to email!" });
@@ -83,6 +101,7 @@ app.post('/api/verify', (req, res) => {
     const user = tempUserStore[email];
 
     if (user && user.otp === otp) {
+        // Logic to move user to permanent Database goes here
         res.status(200).json({ success: true, message: "Account Verified!" });
     } else {
         res.status(400).json({ success: false, message: "Invalid OTP" });
@@ -94,9 +113,8 @@ app.post('/api/admin/upload', (req, res) => {
     res.status(200).json({ success: true, message: "Upload received successfully!" });
 });
 
-// --- ADMIN PENDING ROUTE (Added to fix 404 error) ---
+// --- ADMIN PENDING ROUTE ---
 app.get('/api/admin/pending', (req, res) => {
-    // Return dummy data/array or empty list for now until database integration
     res.status(200).json({ success: true, pendingRequests: [] });
 });
 
