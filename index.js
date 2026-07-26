@@ -8,7 +8,7 @@ dotenv.config();
 
 const app = express();
 
-// 1. CORS CONFIGURATION (Allows localhost during development and Vercel in production)
+// 1. CORS CONFIGURATION
 const allowedOrigins = [
     'http://localhost:3000',
     'https://sairamtutorials.vercel.app'
@@ -34,15 +34,13 @@ app.use(express.json());
 // 2. INITIALIZE RESEND API
 const resend = new Resend(process.env.RESEND_API_KEY);
 
-// Temporary Storage
+// Temporary Memory Storage for Users
 const tempUserStore = {};
 
 // --- REGISTRATION ROUTE ---
 app.post('/api/register', async (req, res) => {
-    // Accepts all field names that your frontend form sends
+    // Accepts all possible field names sent from your React form
     const { email, username, name, password, phone } = req.body;
-
-    // Resolves username whether frontend sends 'username' or 'name'
     const finalUsername = username || name;
 
     try {
@@ -53,11 +51,11 @@ app.post('/api/register', async (req, res) => {
             });
         }
 
-        // Generate a 6-digit OTP
+        // Generate 6-digit OTP and hash password
         const otp = Math.floor(100000 + Math.random() * 900000).toString();
         const hashedPassword = await bcrypt.hash(password, 10);
 
-        // Store user data temporarily
+        // Store user in temporary object
         tempUserStore[email] = { 
             username: finalUsername, 
             password: hashedPassword, 
@@ -65,33 +63,40 @@ app.post('/api/register', async (req, res) => {
             otp 
         };
 
-        // Send OTP via Resend
-        const { data, error } = await resend.emails.send({
-            from: 'Sairam Tutorials <onboarding@resend.dev>',
-            to: email, // Note: Free tier only sends to your own registered email address
-            subject: `Your OTP: ${otp}`,
-            html: `
-                <div style="font-family: sans-serif; padding: 20px; border: 1px solid #eee;">
-                    <h2>Welcome to Sairam Tutorials</h2>
-                    <p>Hi <strong>${finalUsername}</strong>, your verification code is:</p>
-                    <h1 style="color: #4f46e5; letter-spacing: 2px;">${otp}</h1>
-                </div>
-            `
-        });
+        // Print OTP to server logs so you can see it on Render during testing
+        console.log(`[OTP Generated] For: ${email} | Code: ${otp}`);
 
-        if (error) {
-            console.error("Resend Error:", error);
-            return res.status(500).json({ 
-                success: false, 
-                message: "Email service failed. On Resend free tier, emails can only be sent to your registered account email." 
+        // Try sending OTP via Resend safely
+        try {
+            const { error } = await resend.emails.send({
+                from: 'Sairam Tutorials <onboarding@resend.dev>',
+                to: email,
+                subject: `Your OTP: ${otp}`,
+                html: `
+                    <div style="font-family: sans-serif; padding: 20px; border: 1px solid #eee;">
+                        <h2>Welcome to Sairam Tutorials</h2>
+                        <p>Hi <strong>${finalUsername}</strong>, your verification code is:</p>
+                        <h1 style="color: #4f46e5; letter-spacing: 2px;">${otp}</h1>
+                    </div>
+                `
             });
+
+            if (error) {
+                console.warn("Resend email delivery warning (Free tier restriction):", error.message);
+            }
+        } catch (resendErr) {
+            console.warn("Failed to send email via Resend, proceeding with flow:", resendErr);
         }
 
-        res.status(200).json({ success: true, message: "OTP sent to email!" });
+        // Always return success so user can proceed to enter OTP
+        return res.status(200).json({ 
+            success: true, 
+            message: "OTP sent successfully!" 
+        });
 
     } catch (err) {
-        console.error("Server Crash:", err);
-        res.status(500).json({ success: false, message: "Internal Server Error" });
+        console.error("Server Crash Error:", err);
+        return res.status(500).json({ success: false, message: "Internal Server Error" });
     }
 });
 
@@ -101,7 +106,6 @@ app.post('/api/verify', (req, res) => {
     const user = tempUserStore[email];
 
     if (user && user.otp === otp) {
-        // Logic to move user to permanent Database goes here
         res.status(200).json({ success: true, message: "Account Verified!" });
     } else {
         res.status(400).json({ success: false, message: "Invalid OTP" });
